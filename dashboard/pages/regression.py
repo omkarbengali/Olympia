@@ -1,12 +1,17 @@
 """
 Linear Regression Page for OLYMPIA.
-Predicts country medal totals using historical Olympic lag features.
-Adheres strictly to chronological splitting to prevent data leakage.
+Supervised linear regression predicting national Olympic medal counts strictly from historical (t-1) performance.
+Adheres strictly to chronological splitting to guarantee zero data leakage.
 """
+
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+from warehouse.warehouse import get_denormalized_medals
 from dashboard.components.metrics import render_kpi_row, render_viva_note
 from dashboard.components.charts import display_chart
 from analytics.regression import (
@@ -16,18 +21,18 @@ from analytics.regression import (
 )
 
 
-def render_page(df: pd.DataFrame):
+def render_page(df: pd.DataFrame = None):
+    if df is None:
+        df = get_denormalized_medals()
+
+    # 1. Page Title & One-Sentence Summary
     st.title("📈 Linear Regression Olympic Medal Prediction")
-    st.caption("Supervised regression predicting national Olympic medal counts strictly from historical (t-1) performance.")
+    st.caption("Supervised machine learning model predicting national Olympic medal counts from historical (t-1) performance.")
 
-    render_viva_note(
-        "Linear Regression in Olympic Analytics",
-        "Linear Regression estimates the linear relationship between continuous target variable Y (Medals won at edition t) and explanatory features X (Historical medals won at edition t-1): Y = β₀ + β₁X₁ + ... + βₖXₖ + ε.",
-        "Zero Data Leakage: Training is split chronologically (e.g. Train on past games ≤ 2012, Test on unseen future games > 2012). Future medal outcomes are never used to predict historical results."
-    )
+    # Ethical Methodology Disclaimer Banner
+    st.warning("⚠️ **Historical-data-based model estimate:** This model estimates medal potential based strictly on past Olympic edition performance. It is an analytical benchmark, not an authoritative guarantee of actual athletic outcomes.")
 
-    st.markdown("---")
-
+    # 2. Controls & Model Configuration
     col_ctrl1, col_ctrl2 = st.columns([1, 1])
 
     with col_ctrl1:
@@ -37,7 +42,7 @@ def render_page(df: pd.DataFrame):
             max_value=2020,
             value=2012,
             step=4,
-            help="Games up to this year are used for training; games after this year serve as unseen test data."
+            help="Games up to this year train the model; games after this year serve as strictly unseen test data."
         )
 
     with col_ctrl2:
@@ -55,7 +60,7 @@ def render_page(df: pd.DataFrame):
         )
 
     if not selected_features:
-        st.warning("Please select at least one predictor feature.")
+        st.info("Please select at least one predictor feature to train the model.")
         return
 
     # Train model
@@ -69,52 +74,63 @@ def render_page(df: pd.DataFrame):
             st.error(f"Error training model: {e}")
             return
 
-    # KPI Evaluation Metrics
+    # 3. Key Metrics Row
     render_kpi_row([
-        {"title": "R² Score (Goodness of Fit)", "value": f"{reg_res['r2']:.3f}", "subtitle": "Proportion of variance explained", "icon": "🎯"},
-        {"title": "Mean Absolute Error (MAE)", "value": f"{reg_res['mae']:.2f}", "subtitle": "Average medal prediction error", "icon": "📏"},
+        {"title": "R² Score (Goodness of Fit)", "value": f"{reg_res['r2']:.3f}", "subtitle": "Variance explained", "icon": "🎯"},
+        {"title": "Mean Absolute Error (MAE)", "value": f"{reg_res['mae']:.2f}", "subtitle": "Avg medal error", "icon": "📏"},
         {"title": "Root Mean Squared Error (RMSE)", "value": f"{reg_res['rmse']:.2f}", "subtitle": "Penalizes large errors", "icon": "📐"},
-        {"title": "Training Instances", "value": f"{reg_res['train_samples']:,}", "subtitle": f"Editions ≤ {split_year}", "icon": "🏋️"},
-        {"title": "Testing Instances", "value": f"{reg_res['test_samples']:,}", "subtitle": f"Editions > {split_year}", "icon": "🧪"},
+        {"title": "Training Period", "value": f"≤ {split_year}", "subtitle": f"{reg_res['train_samples']} samples", "icon": "🏋️"},
+        {"title": "Testing Period", "value": f"> {split_year}", "subtitle": f"{reg_res['test_samples']} samples", "icon": "🧪"},
     ])
 
     st.markdown("---")
 
+    # 4. Main Visualization: Actual vs Predicted Scatter
     col1, col2 = st.columns([3, 2])
 
     with col1:
+        st.subheader("📊 Actual vs. Predicted Medals (Test Set)")
         fig_scatter = plot_regression_actual_vs_predicted(reg_res)
-        display_chart(fig_scatter, key="reg_actual_vs_pred")
+        display_chart(fig_scatter, key="reg_actual_vs_pred_chart")
+        st.caption("Points near the dashed 45° diagonal line indicate accurate predictions. Points above the line represent nations exceeding historical expectations.")
 
     with col2:
-        st.markdown("### ⚖️ Learned Feature Coefficients")
-        st.markdown(f"**Intercept (β₀):** `{reg_res['intercept']}`")
+        st.subheader("⚖️ Learned Feature Weights")
+        st.markdown(f"**Intercept (β₀):** `{reg_res['intercept']:.3f}`")
         coef_df = pd.DataFrame({
             "Feature": list(reg_res["coefficients"].keys()),
-            "Coefficient (Weight)": list(reg_res["coefficients"].values())
+            "Learned Coefficient (Weight)": [f"{v:.4f}" for v in reg_res["coefficients"].values()]
         })
-        st.dataframe(coef_df, use_container_width=True)
+        st.dataframe(coef_df, use_container_width=True, hide_index=True)
 
-        st.markdown("### 🔮 Interactive Live Predictor")
-        st.markdown("Test the trained model by entering prior Olympic performance:")
-        input_total = st.number_input("Previous Total Medals", min_value=0, max_value=150, value=7)
-        input_gold = st.number_input("Previous Gold Medals", min_value=0, max_value=60, value=1)
-        input_silver = st.number_input("Previous Silver Medals", min_value=0, max_value=60, value=2)
-        input_bronze = st.number_input("Previous Bronze Medals", min_value=0, max_value=60, value=4)
-        input_pts = input_gold * 3 + input_silver * 2 + input_bronze * 1
+        st.subheader("🔮 Interactive Live Medal Estimator")
+        st.caption("Test the trained model by inputting prior Olympic results:")
+        test_prev_medals = st.number_input("Previous Edition Total Medals", min_value=0, max_value=150, value=7, key="live_prev_medals")
+        test_prev_golds = st.number_input("Previous Edition Gold Medals", min_value=0, max_value=50, value=1, key="live_prev_golds")
 
-        input_dict = {
-            "prev_total_medals": input_total,
-            "prev_gold_medals": input_gold,
-            "prev_silver_medals": input_silver,
-            "prev_bronze_medals": input_bronze,
-            "prev_medal_points": input_pts
-        }
+        # Compute simple estimation using learned weights
+        est_val = reg_res["intercept"]
+        if "prev_total_medals" in reg_res["coefficients"]:
+            est_val += reg_res["coefficients"]["prev_total_medals"] * test_prev_medals
+        if "prev_gold_medals" in reg_res["coefficients"]:
+            est_val += reg_res["coefficients"]["prev_gold_medals"] * test_prev_golds
+        est_val = max(0.0, round(float(est_val), 1))
 
-        features_vector = [input_dict[f] for f in selected_features]
-        predicted_val = max(0.0, float(reg_res["model"].predict([features_vector])[0]))
-        st.success(f"**Predicted Next Total Medals:** `{predicted_val:.1f}` medals")
+        st.markdown(f"""
+        <div style="background: rgba(56, 189, 248, 0.1); border: 1px solid #38bdf8; border-radius: 8px; padding: 0.8rem; text-align: center; margin-top: 0.5rem;">
+            <div style="font-size: 0.8rem; color: #94a3b8; text-transform: uppercase;">Estimated Next Edition Medals</div>
+            <div style="font-size: 1.8rem; font-weight: 800; color: #38bdf8;">~ {est_val} medals</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.markdown("---")
-    with st.expander("📋 Inspect Test Set Prediction Results"):
-        st.dataframe(reg_res["results_df"].sort_values(by="total_medals", ascending=False), use_container_width=True)
+    # 5. Optional Technical Details
+    with st.expander("🛠️ Methodology & Zero Data Leakage Viva Note"):
+        render_viva_note(
+            "Zero Data Leakage Chronological Splitting",
+            "In temporal forecasting, random k-fold cross-validation causes fatal data leakage by training on future editions to predict past editions. OLYMPIA enforces strict chronological splitting: Games ≤ Split Year train the regression model, and Games > Split Year evaluate out-of-sample accuracy.",
+            "Linear regression assumes linear relationships and homoscedasticity. Outliers (e.g. nation boycotts or host nation surges) present real-world variance accounted for by RMSE."
+        )
+
+
+if __name__ == "__main__":
+    render_page()
