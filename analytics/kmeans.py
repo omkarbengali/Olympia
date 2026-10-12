@@ -69,7 +69,30 @@ def run_kmeans(
     labels = kmeans.fit_predict(X_scaled)
 
     result_df = country_df.copy()
-    result_df["cluster"] = [f"Cluster {i+1}" for i in labels]
+    raw_clusters = [f"Cluster {i+1}" for i in labels]
+    result_df["raw_cluster"] = raw_clusters
+
+    # Calculate mean medal points to rank clusters from highest to lowest impact
+    cluster_means = result_df.groupby("raw_cluster")["medal_points"].mean().sort_values(ascending=False)
+    
+    label_templates = [
+        "👑 Global Superpowers",
+        "⚡ Specialist Powerhouses",
+        "🎯 Emerging Contenders",
+        "🌱 Occasional Podium Finishers",
+        "🔥 Rising Challenger Nations",
+        "🏅 Developing Olympic Programs"
+    ]
+    
+    mapping = {}
+    for rank, (raw_c, _) in enumerate(cluster_means.items()):
+        if rank < len(label_templates):
+            mapping[raw_c] = label_templates[rank]
+        else:
+            mapping[raw_c] = f"Tier {rank+1} Nations"
+
+    result_df["cluster"] = result_df["raw_cluster"].map(mapping)
+    result_df["cluster_label"] = result_df["cluster"]
 
     # Cluster summary
     summary = result_df.groupby("cluster")[CLUSTERING_FEATURES].agg(["count", "mean", "min", "max"])
@@ -112,9 +135,9 @@ def plot_elbow_curve(elbow_data: List[Dict[str, Any]]) -> go.Figure:
         y="inertia",
         markers=True,
         template="plotly_dark",
-        color_discrete_sequence=["#38bdf8"]
+        color_discrete_sequence=["#5DD62C"]
     )
-    fig.update_traces(line={"width": 3}, marker={"size": 9, "color": "#fbbf24"})
+    fig.update_traces(line={"width": 3}, marker={"size": 9, "color": "#F8F8F8"})
     return apply_dark_theme(fig, title="K-Means Elbow Method (Inertia vs Number of Clusters)", x_title="Number of Clusters (K)", y_title="Inertia (Sum of Squared Distances)")
 
 

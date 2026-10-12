@@ -1,11 +1,17 @@
 """
 Authentication and Role-Based Access Control for OLYMPIA.
-Supports 3 distinct user roles:
-1. ADMIN: Full system access (Warehouse, ML, OLAP, Data Quality, Overview).
-2. SPORT ENTHUSIAST: Simplified, visual, zero-jargon exploration.
-3. PROFESSIONAL PLAYER / ACADEMY: High-performance intelligence and historical benchmarks.
+High-Contrast Modern Dark-Themed Authentication Portal.
+Palette:
+- #0F0F0F (Pitch Black Canvas)
+- #202020 (Charcoal Surface Container)
+- #5DD62C (Electric Lime Accent & CTA)
+- #337418 (Forest Green Secondary Accent)
+- #F8F8F8 (Off-White Primary Typography)
 """
 
+import os
+import base64
+import textwrap
 import streamlit as st
 from typing import Optional, Tuple
 
@@ -18,20 +24,23 @@ ROLE_DISPLAY = {
     ROLE_ADMIN: {
         "title": "Administrator",
         "icon": "🛡️",
-        "badge_color": "#ef4444",
+        "badge_color": "#5DD62C",
+        "badge_bg": "rgba(93, 214, 44, 0.15)",
         "description": "Full access to Data Warehouse, ETL status, ML models, and administrative tools."
     },
     ROLE_ENTHUSIAST: {
         "title": "Sport Enthusiast",
         "icon": "🎉",
-        "badge_color": "#06b6d4",
+        "badge_color": "#A3E635",
+        "badge_bg": "rgba(163, 230, 53, 0.15)",
         "description": "Streamlined, visual, interactive Olympic exploration without database theory."
     },
     ROLE_ACADEMY: {
-        "title": "Professional Player / Academy",
+        "title": "Player / Academy",
         "icon": "🎯",
-        "badge_color": "#10b981",
-        "description": "High-performance discipline intelligence, competitive landscape, and historical benchmarks."
+        "badge_color": "#5DD62C",
+        "badge_bg": "rgba(93, 214, 44, 0.15)",
+        "description": "High-performance discipline intelligence, competitive landscape, and benchmarks."
     }
 }
 
@@ -42,10 +51,17 @@ DEMO_ACCOUNTS = {
 }
 
 
+def _safe_html(html: str):
+    """Renders HTML safely without markdown code-block indentation interpretation."""
+    st.markdown(textwrap.dedent(html).strip(), unsafe_allow_html=True)
+
+
 def init_auth():
     """Initializes session state keys for authentication."""
     if "authenticated" not in st.session_state:
         st.session_state["authenticated"] = False
+    if "logged_in" not in st.session_state:
+        st.session_state["logged_in"] = False
     if "user_role" not in st.session_state:
         st.session_state["user_role"] = None
     if "username" not in st.session_state:
@@ -59,7 +75,26 @@ def init_auth():
 def is_authenticated() -> bool:
     """Checks if the current session has an authenticated user."""
     init_auth()
-    return st.session_state.get("authenticated", False)
+    # Support query parameter login convenience (e.g., ?role=admin, ?role=fan, ?role=coach)
+    role_param = st.query_params.get("role")
+    if role_param and not st.session_state.get("authenticated", False):
+        role_map = {
+            "admin": ("admin", ROLE_ADMIN, "System Administrator"),
+            "fan": ("fan", ROLE_ENTHUSIAST, "Olympic Fan"),
+            "coach": ("coach", ROLE_ACADEMY, "Elite Sports Academy"),
+        }
+        if role_param.lower() in role_map:
+            u, r, f = role_map[role_param.lower()]
+            st.session_state["authenticated"] = True
+            st.session_state["logged_in"] = True
+            st.session_state["username"] = u
+            st.session_state["user_role"] = r
+            st.session_state["user_fullname"] = f
+            return True
+
+    is_auth = st.session_state.get("authenticated", False)
+    st.session_state["logged_in"] = is_auth
+    return is_auth
 
 
 def get_current_role() -> Optional[str]:
@@ -84,10 +119,13 @@ def login(username: str, role: str, fullname: Optional[str] = None):
     """Sets session state on successful authentication."""
     init_auth()
     st.session_state["authenticated"] = True
+    st.session_state["logged_in"] = True
     st.session_state["username"] = username
     st.session_state["user_role"] = role
     st.session_state["user_fullname"] = fullname or DEMO_ACCOUNTS.get(username, {}).get("name", username)
     st.session_state["selected_role_intent"] = None
+    if "role" in st.query_params:
+        del st.query_params["role"]
     st.rerun()
 
 
@@ -95,105 +133,268 @@ def logout():
     """Clears authentication session state."""
     init_auth()
     st.session_state["authenticated"] = False
+    st.session_state["logged_in"] = False
     st.session_state["username"] = None
     st.session_state["user_role"] = None
     st.session_state["user_fullname"] = None
     st.session_state["selected_role_intent"] = None
+    if "role" in st.query_params:
+        del st.query_params["role"]
     st.rerun()
+
+
+@st.cache_data
+def get_login_background_images_b64() -> list:
+    """Reads Olympic background images and returns them as Base64 data URIs."""
+    assets_dir = os.path.join(os.path.dirname(__file__), "assets", "backgrounds")
+    filenames = [
+        "olympic_stadium.png",
+        "usain_bolt.png",
+        "olympic_flags.png",
+        "ancient_olympics.png",
+        "olympic_rings.png"
+    ]
+    b64_list = []
+    for fn in filenames:
+        p = os.path.join(assets_dir, fn)
+        if os.path.exists(p):
+            with open(p, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+                b64_list.append(f"data:image/png;base64,{b64}")
+    return b64_list
+
+
+def render_login_scrolling_background():
+    """
+    Renders an infinite 3-column continuous scrolling image background
+    with heavy blur and opacity, positioned strictly behind the login page.
+    Exclusively rendered when the user is unauthenticated.
+    """
+    if st.session_state.get("logged_in", False):
+        return
+
+    images = get_login_background_images_b64()
+    if not images:
+        return
+
+    # Create 3 staggered lists (duplicated to create a seamless infinite loop at -50% translateY)
+    col1_imgs = (images + images)
+    col2_imgs = (images[1:] + images[:1]) + (images[1:] + images[:1])
+    col3_imgs = (images[2:] + images[:2]) + (images[2:] + images[:2])
+
+    col1_html = "".join([f'<img src="{src}" alt="Olympic Asset">' for src in col1_imgs])
+    col2_html = "".join([f'<img src="{src}" alt="Olympic Asset">' for src in col2_imgs])
+    col3_html = "".join([f'<img src="{src}" alt="Olympic Asset">' for src in col3_imgs])
+
+    bg_html = f"""
+    <style>
+        /* 1. 3-COLUMN VERTICAL SCROLL: z-index: -1, position: fixed */
+        .login-bg-container {{
+            position: fixed;
+            top: -5%;
+            left: -5%;
+            width: 110vw;
+            height: 110vh;
+            z-index: -1;
+            overflow: hidden;
+            pointer-events: none;
+            display: flex;
+            justify-content: space-between;
+            gap: 1.8rem;
+            /* 3. HEAVY BLUR & OPACITY */
+            filter: blur(10px) brightness(0.4);
+            opacity: 0.9;
+            box-sizing: border-box;
+        }}
+
+        .login-bg-col {{
+            flex: 1;
+            height: 100%;
+            overflow: hidden;
+            position: relative;
+        }}
+
+        .login-scroll-track {{
+            display: flex;
+            flex-direction: column;
+            gap: 1.8rem;
+            width: 100%;
+            will-change: transform;
+        }}
+
+        .login-scroll-track img {{
+            width: 100%;
+            height: 380px;
+            object-fit: cover;
+            border-radius: 14px;
+            display: block;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7);
+        }}
+
+        /* 2. INFINITE CSS ANIMATION (Staggered 20s, 25s, 30s & Directions Up, Down, Up) */
+        .col-scroll-up-1 {{
+            animation: scrollInfiniteUp 20s linear infinite;
+        }}
+
+        .col-scroll-down {{
+            animation: scrollInfiniteDown 25s linear infinite;
+        }}
+
+        .col-scroll-up-2 {{
+            animation: scrollInfiniteUp 30s linear infinite;
+        }}
+
+        @keyframes scrollInfiniteUp {{
+            0% {{
+                transform: translateY(0);
+            }}
+            100% {{
+                transform: translateY(-50%);
+            }}
+        }}
+
+        @keyframes scrollInfiniteDown {{
+            0% {{
+                transform: translateY(-50%);
+            }}
+            100% {{
+                transform: translateY(0%);
+            }}
+        }}
+
+        /* Ensure .stApp background transparency ONLY during login state so z-index: -1 is visible */
+        .stApp {{
+            background-color: transparent !important;
+        }}
+        html, body {{
+            background-color: #0F0F0F !important;
+        }}
+        /* Ensure login cards stay firmly interactive and prominent */
+        .main .block-container, div[data-testid="stMainBlockContainer"] {{
+            position: relative !important;
+            z-index: 10 !important;
+        }}
+    </style>
+
+    <div class="login-bg-container">
+        <div class="login-bg-col">
+            <div class="login-scroll-track col-scroll-up-1">
+                {col1_html}
+            </div>
+        </div>
+        <div class="login-bg-col">
+            <div class="login-scroll-track col-scroll-down">
+                {col2_html}
+            </div>
+        </div>
+        <div class="login-bg-col">
+            <div class="login-scroll-track col-scroll-up-2">
+                {col3_html}
+            </div>
+        </div>
+    </div>
+    """
+
+    st.markdown(bg_html, unsafe_allow_html=True)
 
 
 def render_landing_page():
     """
-    Renders the modern, 3-role entry portal.
-    Users can either 1-click quick launch a role or sign in with demo credentials.
+    Renders the modern, 3-role high-contrast dark authentication portal.
+    Users must authenticate before accessing the main dashboard.
     """
     init_auth()
 
+    # Dynamic blurred continuous scrolling background (exclusively for login)
+    if not st.session_state.get("logged_in", False):
+        render_login_scrolling_background()
+
     # Hero Banner
-    st.markdown("""
-    <div style="text-align: center; padding: 2.5rem 1rem 1.5rem 1rem;">
-        <div style="font-size: 3.2rem; line-height: 1;">🏅</div>
-        <h1 style="font-size: 2.6rem; font-weight: 800; margin-top: 0.5rem; margin-bottom: 0.2rem; color: #f8fafc; letter-spacing: -0.03em;">
+    _safe_html("""
+    <div style="text-align: center; padding: 2rem 1rem 1.5rem 1rem;">
+        <div style="font-size: 3.2rem; line-height: 1;">⚡</div>
+        <h1 style="font-size: 2.8rem; font-weight: 800; margin-top: 0.5rem; margin-bottom: 0.2rem; color: #F8F8F8; letter-spacing: -0.03em;">
             OLYMPIA
         </h1>
-        <div style="font-size: 1.15rem; color: #38bdf8; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;">
+        <div style="font-size: 1.15rem; color: #5DD62C; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">
             Olympic Performance Analytics & Intelligence System
         </div>
-        <p style="max-width: 650px; margin: 0.8rem auto 0 auto; color: #94a3b8; font-size: 0.95rem; line-height: 1.5;">
+        <p style="max-width: 680px; margin: 0.8rem auto 0 auto; color: #A0A0A0; font-size: 1rem; line-height: 1.5;">
             Explore 128 years of modern Olympic history (1896 – 2024) powered by a verified Star Schema Data Warehouse,
             unsupervised clustering, predictive modeling, and multi-dimensional OLAP analytics.
         </p>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
-    st.markdown("<h3 style='text-align: center; color: #e2e8f0; margin-bottom: 1.5rem;'>Choose Your Experience</h3>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: center; color: #F8F8F8; margin-bottom: 1.5rem;'>Choose Your Portal Experience</h3>", unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns(3, gap="medium")
 
     # 1. ADMIN ROLE CARD
     with col1:
-        st.markdown("""
-        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.5rem; height: 320px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);">
+        _safe_html("""
+        <div style="background: #202020; border: 1px solid #337418; border-radius: 14px; padding: 1.5rem; height: 320px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
             <div>
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🛡️</div>
-                <div style="font-size: 1.25rem; font-weight: 700; color: #f8fafc;">Administrator</div>
-                <div style="font-size: 0.8rem; color: #ef4444; font-weight: 600; text-transform: uppercase; margin-bottom: 0.75rem;">Full System Access</div>
-                <div style="font-size: 0.88rem; color: #94a3b8; line-height: 1.4;">
+                <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">🛡️</div>
+                <div style="font-size: 1.3rem; font-weight: 800; color: #F8F8F8;">Administrator</div>
+                <div style="font-size: 0.8rem; color: #5DD62C; font-weight: 700; text-transform: uppercase; margin-bottom: 0.75rem;">Full System Access</div>
+                <div style="font-size: 0.9rem; color: #A0A0A0; line-height: 1.45;">
                     Data Warehouse inspection, ETL health, data quality audits, OLAP cube laboratory, and machine learning models.
                 </div>
             </div>
-            <div style="font-size: 0.75rem; color: #64748b; border-top: 1px solid #334155; padding-top: 0.5rem;">
-                Default user: <code>admin</code>
+            <div style="font-size: 0.75rem; color: #707070; border-top: 1px solid #2C2C2C; padding-top: 0.5rem;">
+                Default user: <code style="color: #5DD62C;">admin</code>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         if st.button("🚀 Enter as Admin", key="btn_quick_admin", use_container_width=True):
             login("admin", ROLE_ADMIN, "System Administrator")
 
     # 2. SPORT ENTHUSIAST ROLE CARD
     with col2:
-        st.markdown("""
-        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.5rem; height: 320px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);">
+        _safe_html("""
+        <div style="background: #202020; border: 1px solid #337418; border-radius: 14px; padding: 1.5rem; height: 320px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
             <div>
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🎉</div>
-                <div style="font-size: 1.25rem; font-weight: 700; color: #f8fafc;">Sport Enthusiast</div>
-                <div style="font-size: 0.8rem; color: #06b6d4; font-weight: 600; text-transform: uppercase; margin-bottom: 0.75rem;">Visual & Intuitive</div>
-                <div style="font-size: 0.88rem; color: #94a3b8; line-height: 1.4;">
+                <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">🎉</div>
+                <div style="font-size: 1.3rem; font-weight: 800; color: #F8F8F8;">Sport Enthusiast</div>
+                <div style="font-size: 0.8rem; color: #A3E635; font-weight: 700; text-transform: uppercase; margin-bottom: 0.75rem;">Visual & Intuitive</div>
+                <div style="font-size: 0.9rem; color: #A0A0A0; line-height: 1.45;">
                     Engaging Olympic storyboards, country highlights, sport milestones, head-to-head nation showdowns, and medal trends.
                 </div>
             </div>
-            <div style="font-size: 0.75rem; color: #64748b; border-top: 1px solid #334155; padding-top: 0.5rem;">
-                Default user: <code>fan</code>
+            <div style="font-size: 0.75rem; color: #707070; border-top: 1px solid #2C2C2C; padding-top: 0.5rem;">
+                Default user: <code style="color: #A3E635;">fan</code>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         if st.button("🌟 Enter as Enthusiast", key="btn_quick_fan", use_container_width=True):
             login("fan", ROLE_ENTHUSIAST, "Olympic Fan")
 
     # 3. PLAYER / ACADEMY ROLE CARD
     with col3:
-        st.markdown("""
-        <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 1.5rem; height: 320px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);">
+        _safe_html("""
+        <div style="background: #202020; border: 1px solid #337418; border-radius: 14px; padding: 1.5rem; height: 320px; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 4px 20px rgba(0,0,0,0.5);">
             <div>
-                <div style="font-size: 2rem; margin-bottom: 0.5rem;">🎯</div>
-                <div style="font-size: 1.25rem; font-weight: 700; color: #f8fafc;">Player / Academy</div>
-                <div style="font-size: 0.8rem; color: #10b981; font-weight: 600; text-transform: uppercase; margin-bottom: 0.75rem;">Performance Analytics</div>
-                <div style="font-size: 0.88rem; color: #94a3b8; line-height: 1.4;">
+                <div style="font-size: 2.2rem; margin-bottom: 0.4rem;">🎯</div>
+                <div style="font-size: 1.3rem; font-weight: 800; color: #F8F8F8;">Player / Academy</div>
+                <div style="font-size: 0.8rem; color: #5DD62C; font-weight: 700; text-transform: uppercase; margin-bottom: 0.75rem;">Performance Analytics</div>
+                <div style="font-size: 0.9rem; color: #A0A0A0; line-height: 1.45;">
                     Discipline competitiveness, competitor nation depth, global performance tiers, and historical Olympic benchmark trajectories.
                 </div>
             </div>
-            <div style="font-size: 0.75rem; color: #64748b; border-top: 1px solid #334155; padding-top: 0.5rem;">
-                Default user: <code>coach</code>
+            <div style="font-size: 0.75rem; color: #707070; border-top: 1px solid #2C2C2C; padding-top: 0.5rem;">
+                Default user: <code style="color: #5DD62C;">coach</code>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
         st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
         if st.button("🏆 Enter as Player / Academy", key="btn_quick_coach", use_container_width=True):
             login("coach", ROLE_ACADEMY, "Elite Sports Academy")
 
     # Custom Credential Login Option
+    st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)
     with st.expander("🔐 Sign In with Custom Credentials"):
         c1, c2, c3 = st.columns([2, 2, 1])
         with c1:
@@ -208,16 +409,16 @@ def render_landing_page():
                     acc = DEMO_ACCOUNTS[uname_clean]
                     login(uname_clean, acc["role"], acc["name"])
                 else:
-                    st.error("Invalid username or password. Demo accounts: admin / olympia2024, fan / olympia, coach / olympia")
+                    st.error("Invalid credentials. Demo accounts: admin / olympia2024, fan / olympia, coach / olympia")
 
     # Footer Metadata
-    st.markdown("<div style='height: 40px;'></div>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style="text-align: center; font-size: 0.8rem; color: #64748b; border-top: 1px solid #1e293b; padding-top: 1.5rem;">
+    st.markdown("<div style='height: 30px;'></div>", unsafe_allow_html=True)
+    _safe_html("""
+    <div style="text-align: center; font-size: 0.8rem; color: #707070; border-top: 1px solid #2C2C2C; padding-top: 1.5rem;">
         OLYMPIA System Architecture: Python 3 • SQLite3 Star Schema • Scikit-Learn • Plotly • Streamlit<br>
         20,240 Verified Podium Medal Records (1896 Athens – 2024 Paris)
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
 
 def render_sidebar_user_badge():
@@ -229,24 +430,26 @@ def render_sidebar_user_badge():
     role = user["role"]
     role_meta = ROLE_DISPLAY.get(role, ROLE_DISPLAY[ROLE_ENTHUSIAST])
 
-    st.sidebar.markdown(f"""
+    _safe_html(f"""
     <div style="
-        background: #1e293b;
-        border: 1px solid #334155;
-        border-radius: 8px;
-        padding: 0.75rem 0.9rem;
+        background: #202020;
+        border: 1px solid #337418;
+        border-radius: 10px;
+        padding: 0.8rem 1rem;
         margin-bottom: 1rem;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
     ">
         <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div style="font-weight: 700; color: #f8fafc; font-size: 0.95rem;">
+            <div style="font-weight: 800; color: #F8F8F8; font-size: 0.95rem;">
                 {role_meta['icon']} {user['fullname']}
             </div>
             <span style="
-                background: {role_meta['badge_color']};
-                color: #ffffff;
+                background: {role_meta.get('badge_bg', 'rgba(93, 214, 44, 0.15)')};
+                color: {role_meta['badge_color']};
+                border: 1px solid {role_meta['badge_color']};
                 font-size: 0.65rem;
                 font-weight: 800;
-                padding: 0.15rem 0.45rem;
+                padding: 0.15rem 0.5rem;
                 border-radius: 9999px;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
@@ -254,11 +457,11 @@ def render_sidebar_user_badge():
                 {role_meta['title']}
             </span>
         </div>
-        <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem;">
-            User ID: <code>{user['username']}</code>
+        <div style="font-size: 0.75rem; color: #A0A0A0; margin-top: 0.3rem;">
+            User ID: <code style="color: #5DD62C;">{user['username']}</code>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     if st.sidebar.button("🚪 Log Out", key="sidebar_logout_btn", use_container_width=True):
         logout()
