@@ -15,10 +15,11 @@ import textwrap
 import streamlit as st
 from typing import Optional, Tuple
 
-# Role Constants
-ROLE_ADMIN = "ADMIN"
-ROLE_ENTHUSIAST = "SPORT_ENTHUSIAST"
-ROLE_ACADEMY = "PLAYER_ACADEMY"
+# Role Constants (Normalized as requested: admin, enthusiast, professional)
+ROLE_ADMIN = "admin"
+ROLE_ENTHUSIAST = "enthusiast"
+ROLE_PROFESSIONAL = "professional"
+ROLE_ACADEMY = ROLE_PROFESSIONAL  # Alias for backwards compatibility
 
 ROLE_DISPLAY = {
     ROLE_ADMIN: {
@@ -26,28 +27,52 @@ ROLE_DISPLAY = {
         "icon": "🛡️",
         "badge_color": "#5DD62C",
         "badge_bg": "rgba(93, 214, 44, 0.15)",
-        "description": "Full access to Data Warehouse, ETL status, ML models, and administrative tools."
+        "description": "Full access to Data Warehouse, dataset editor, system stats, and administrative controls."
     },
     ROLE_ENTHUSIAST: {
         "title": "Sport Enthusiast",
         "icon": "🎉",
         "badge_color": "#A3E635",
         "badge_bg": "rgba(163, 230, 53, 0.15)",
-        "description": "Streamlined, visual, interactive Olympic exploration without database theory."
+        "description": "The Podium, OLAP Cube, Data Mining Arena, and Athlete Hall of Fame."
     },
-    ROLE_ACADEMY: {
-        "title": "Player / Academy",
+    ROLE_PROFESSIONAL: {
+        "title": "Professional / Academy",
         "icon": "🎯",
         "badge_color": "#5DD62C",
         "badge_bg": "rgba(93, 214, 44, 0.15)",
-        "description": "High-performance discipline intelligence, competitive landscape, and benchmarks."
+        "description": "Advanced physical telemetry, sports science deep dives, and Predict Your Potential."
+    },
+    # Backwards compatibility keys
+    "ADMIN": {
+        "title": "Administrator",
+        "icon": "🛡️",
+        "badge_color": "#5DD62C",
+        "badge_bg": "rgba(93, 214, 44, 0.15)",
+        "description": "Full access to Data Warehouse, dataset editor, system stats, and administrative controls."
+    },
+    "SPORT_ENTHUSIAST": {
+        "title": "Sport Enthusiast",
+        "icon": "🎉",
+        "badge_color": "#A3E635",
+        "badge_bg": "rgba(163, 230, 53, 0.15)",
+        "description": "The Podium, OLAP Cube, Data Mining Arena, and Athlete Hall of Fame."
+    },
+    "PLAYER_ACADEMY": {
+        "title": "Professional / Academy",
+        "icon": "🎯",
+        "badge_color": "#5DD62C",
+        "badge_bg": "rgba(93, 214, 44, 0.15)",
+        "description": "Advanced physical telemetry, sports science deep dives, and Predict Your Potential."
     }
 }
 
 DEMO_ACCOUNTS = {
     "admin": {"password": "olympia2024", "role": ROLE_ADMIN, "name": "System Administrator"},
     "fan": {"password": "olympia", "role": ROLE_ENTHUSIAST, "name": "Olympic Fan"},
-    "coach": {"password": "olympia", "role": ROLE_ACADEMY, "name": "Elite Sports Academy"},
+    "coach": {"password": "olympia", "role": ROLE_PROFESSIONAL, "name": "Elite Sports Academy"},
+    "professional": {"password": "olympia", "role": ROLE_PROFESSIONAL, "name": "Performance Analyst"},
+    "enthusiast": {"password": "olympia", "role": ROLE_ENTHUSIAST, "name": "Olympic Enthusiast"}
 }
 
 
@@ -81,7 +106,10 @@ def is_authenticated() -> bool:
         role_map = {
             "admin": ("admin", ROLE_ADMIN, "System Administrator"),
             "fan": ("fan", ROLE_ENTHUSIAST, "Olympic Fan"),
-            "coach": ("coach", ROLE_ACADEMY, "Elite Sports Academy"),
+            "enthusiast": ("enthusiast", ROLE_ENTHUSIAST, "Olympic Enthusiast"),
+            "coach": ("coach", ROLE_PROFESSIONAL, "Elite Sports Academy"),
+            "professional": ("professional", ROLE_PROFESSIONAL, "Performance Analyst"),
+            "academy": ("coach", ROLE_PROFESSIONAL, "Elite Sports Academy"),
         }
         if role_param.lower() in role_map:
             u, r, f = role_map[role_param.lower()]

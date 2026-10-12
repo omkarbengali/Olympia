@@ -28,7 +28,13 @@ import plotly.express as px
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
 
-from warehouse.warehouse import get_denormalized_medals
+from warehouse.warehouse import (
+    get_denormalized_medals,
+    get_db_connection,
+    get_table_counts,
+    get_db_path
+)
+from analytics.knn_potential import predict_athlete_potential, SPORT_PROFILES
 from analytics.visualization import (
     THEME_BG,
     PAPER_BG,
@@ -56,6 +62,7 @@ from dashboard.auth import (
     render_login_scrolling_background,
     ROLE_ADMIN,
     ROLE_ENTHUSIAST,
+    ROLE_PROFESSIONAL,
     ROLE_ACADEMY
 )
 
@@ -80,11 +87,60 @@ def render_html(html_str: str):
 # 2. Design System: High-Contrast Modern Dark-Themed Styling
 # ------------------------------------------------------------
 render_html("""
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+    @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
-    html, body, [class*="css"] {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    /* Global Typography System */
+    html, body, [class*="css"], .stMarkdown {
+        font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    /* Headings & Big Text: Inter */
+    h1, h2, h3, .metric-container, [data-testid="stMetricValue"], .ticker-value, .hero-title, .admin-kpi-value, .potential-score-badge {
+        font-family: 'Inter', sans-serif !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.02em;
+    }
+
+    /* Sub-headings & Body Text: Segoe UI (Exclude Material Icons/Symbols to prevent ligature text fallbacks) */
+    h4, h5, h6, p, label, input, button, select, textarea, [data-testid="stMetricLabel"], .ticker-label, .hero-subtitle {
+        font-family: 'Segoe UI', sans-serif !important;
+    }
+
+    /* General spans and divs default to Segoe UI without breaking icon spans */
+    span:not([class*="material"]):not([data-testid*="Icon"]),
+    div:not([class*="material"]):not([data-testid*="Icon"]) {
+        font-family: 'Segoe UI', sans-serif;
+    }
+
+    /* Enforce Material Symbols / Icons on Streamlit sidebar collapse toggle and icon elements */
+    .material-symbols-outlined,
+    .material-symbols-rounded,
+    .material-icons,
+    [class*="material-symbols"],
+    [class*="material-icons"],
+    [data-testid*="stIcon"],
+    [data-testid="stSidebarCollapseButton"] span,
+    button[kind="header"] span {
+        font-family: 'Material Symbols Rounded', 'Material Symbols Outlined', 'Material Icons' !important;
+        font-weight: normal;
+        font-style: normal;
+        line-height: 1;
+        letter-spacing: normal;
+        text-transform: none;
+        display: inline-block;
+        white-space: nowrap;
+        word-wrap: normal;
+        direction: ltr;
+        -webkit-font-feature-settings: 'liga';
+        font-feature-settings: 'liga';
+        -webkit-font-smoothing: antialiased;
     }
 
     /* #0F0F0F: Pitch Black / Canvas Background */
@@ -125,12 +181,9 @@ render_html("""
         border-bottom: 1px solid #202020 !important;
     }
 
-    /* #F8F8F8: Off-White / Primary Typography */
+    /* Color Palette Enforcements */
     h1, h2, h3, h4, h5, h6 {
         color: #F8F8F8 !important;
-        font-family: 'Outfit', sans-serif !important;
-        font-weight: 700 !important;
-        letter-spacing: -0.02em;
     }
 
     p, span, label, div {
@@ -157,7 +210,7 @@ render_html("""
         background: linear-gradient(90deg, #5DD62C 0%, #337418 50%, #5DD62C 100%);
     }
     .hero-title {
-        font-family: 'Outfit', sans-serif;
+        font-family: 'Inter', sans-serif !important;
         font-size: 2.3rem;
         font-weight: 800;
         letter-spacing: -0.02em;
@@ -197,7 +250,7 @@ render_html("""
         margin-bottom: 0.3rem;
     }
     .ticker-value {
-        font-family: 'Outfit', sans-serif;
+        font-family: 'Inter', sans-serif !important;
         font-size: 1.85rem;
         font-weight: 800;
         color: #F8F8F8;
@@ -429,42 +482,59 @@ if not is_authenticated():
 
 
 # ------------------------------------------------------------
-# 5. Sidebar Controller (The Control Center)
+# 5. Dynamic Role-Based Access Control (RBAC) Flow
 # ------------------------------------------------------------
+raw_role = st.session_state.get("user_role") or "enthusiast"
+role_str = str(raw_role).lower()
+
+if "admin" in role_str:
+    active_role = "admin"
+elif "prof" in role_str or "academy" in role_str or "coach" in role_str:
+    active_role = "professional"
+else:
+    active_role = "enthusiast"
+
+# Persist normalized role in session state as requested
+st.session_state["user_role"] = active_role
+
+# Sidebar Controller (The Control Center)
 with st.sidebar:
     # Authenticated User Badge & Logout Button at top of sidebar
     render_sidebar_user_badge()
 
-    render_html("""
+    render_html(f"""
     <div style="padding: 0.5rem 0 1rem 0; border-bottom: 1px solid #337418; margin-bottom: 1rem;">
         <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div style="font-size: 1.5rem; font-weight: 800; font-family: 'Outfit', sans-serif; color: #5DD62C; display: flex; align-items: center; gap: 0.4rem;">
+            <div style="font-size: 1.5rem; font-weight: 800; font-family: 'Inter', sans-serif; color: #5DD62C; display: flex; align-items: center; gap: 0.4rem;">
                 <span>⚡</span> OLYMPIA
             </div>
             <span style="font-size: 0.72rem; background: rgba(93, 214, 44, 0.15); color: #5DD62C; border: 1px solid #5DD62C; padding: 0.2rem 0.6rem; border-radius: 12px; font-weight: 700;">
-                LIVE ARENA
+                {active_role.upper()}
             </span>
         </div>
         <div style="font-size: 0.78rem; color: #A0A0A0; margin-top: 0.3rem; letter-spacing: 0.05em; text-transform: uppercase;">
-            ATHLETE DASHBOARD CONTROLLER
+            ROLE CONTROL CENTER
         </div>
     </div>
     """)
 
-    # Quick Mode Toggle
-    st.markdown("### 🎯 Quick Mode Controller")
-    selected_mode = st.sidebar.radio(
-        "Quick Mode Controller",
-        options=[
-            "🏆 The Podium & Medal Tally",
-            "🔍 OLAP Cube (Slice & Dice)",
-            "🤖 Data Mining Arena",
-            "⚡ Athlete Hall of Fame"
-        ],
-        index=0,
-        label_visibility="collapsed",
-        key="quick_mode_controller"
-    )
+    if active_role == "enthusiast":
+        # Quick Mode Toggle for Enthusiast
+        st.markdown("### 🎯 Quick Mode Controller")
+        selected_mode = st.sidebar.radio(
+            "Quick Mode Controller",
+            options=[
+                "🏆 The Podium & Medal Tally",
+                "🔍 OLAP Cube (Slice & Dice)",
+                "🤖 Data Mining Arena",
+                "⚡ Athlete Hall of Fame"
+            ],
+            index=0,
+            label_visibility="collapsed",
+            key="quick_mode_controller"
+        )
+    else:
+        selected_mode = None
 
     st.markdown("---")
     st.markdown("### 🎛️ Filter Controls")
@@ -502,13 +572,14 @@ with st.sidebar:
 
     # Filter Presets
     st.markdown("<div style='margin-top: 0.8rem;'></div>", unsafe_allow_html=True)
-    if st.button("🔄 Reset to All-Time Glory", use_container_width=True):
+    if st.button("🔄 Reset Filters", use_container_width=True):
         st.rerun()
 
     # Controller Status Metrics
     st.markdown("---")
     render_html(f"""
     <div style="font-size: 0.78rem; color: #A0A0A0; line-height: 1.5;">
+        <strong style="color: #F8F8F8;">Active Role:</strong> <span style="color: #5DD62C; font-weight: 700;">{active_role.capitalize()}</span><br>
         <strong style="color: #F8F8F8;">Warehouse Engine:</strong> SQLite3 Star Schema<br>
         <strong style="color: #F8F8F8;">Historical Span:</strong> 1896 – 2024 ({max_year_master - min_year_master} Years)<br>
         <strong style="color: #F8F8F8;">Fact Medals:</strong> {len(df_master):,} verified records
@@ -536,7 +607,473 @@ if selected_sports:
 
 
 # ------------------------------------------------------------
-# 7. HERO HEADER SECTION
+# 9B. ADMIN DASHBOARD: BACKEND DATA & SYSTEM MANAGEMENT
+# ------------------------------------------------------------
+def render_admin_dashboard(df: pd.DataFrame):
+    """
+    Renders the Backend Management Interface for Administrators:
+    - Live Website & Warehouse Statistics (Total Users, Records, Physical DB Size, Last Updated)
+    - Interactive Dataset Management via st.data_editor (view, edit, delete, insert)
+    - Direct SQLite transactional backend integration with safe rollbacks
+    """
+    render_html("""
+    <div class="hero-banner">
+        <div class="hero-title">🛡️ System Administration & Warehouse Control</div>
+        <div class="hero-subtitle">Star Schema Management, Direct Dataset Editor & Enterprise Data Engineering Console</div>
+    </div>
+    """)
+
+    # 1. LIVE WEBSITE & WAREHOUSE STATISTICS
+    db_path = get_db_path()
+    db_size_mb = os.path.getsize(db_path) / (1024 * 1024) if os.path.exists(db_path) else 0.0
+    last_mod_ts = pd.to_datetime(os.path.getmtime(db_path), unit="s").strftime("%Y-%m-%d %H:%M:%S UTC") if os.path.exists(db_path) else "Active"
+    counts = get_table_counts()
+    fact_medals_total = counts.get("fact_medal", len(df))
+
+    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+
+    with stat_col1:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">👥</div>
+            <div class="ticker-value">3 Active</div>
+            <div class="ticker-label">Demo User Accounts</div>
+        </div>
+        """)
+
+    with stat_col2:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">🗄️</div>
+            <div class="ticker-value">{fact_medals_total:,}</div>
+            <div class="ticker-label">Warehouse Records (Facts)</div>
+        </div>
+        """)
+
+    with stat_col3:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">💾</div>
+            <div class="ticker-value">{db_size_mb:.2f} MB</div>
+            <div class="ticker-label">Physical DB Size (SQLite)</div>
+        </div>
+        """)
+
+    with stat_col4:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">🕒</div>
+            <div class="ticker-value" style="font-size: 1.15rem; word-break: break-all;">{last_mod_ts}</div>
+            <div class="ticker-label">Last Database Commit</div>
+        </div>
+        """)
+
+    st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
+
+    # 2. DATA MANAGEMENT WORKSPACE
+    st.markdown("### 🛠️ Backend Data Management Console")
+    st.markdown("Directly inspect, edit, insert, or delete official Olympic medal facts in the SQLite warehouse.")
+
+    tab_edit, tab_add, tab_delete, tab_audit = st.tabs([
+        "✏️ View & Edit Dataset (st.data_editor)",
+        "➕ Add New Medal Fact",
+        "🗑️ Delete Record by ID",
+        "📊 Star Schema Dimensions Audit"
+    ])
+
+    with tab_edit:
+        st.markdown("#### 📝 Interactive Dataset Editor")
+        st.caption("Filter records below, edit cells inline within `st.data_editor`, and commit transactional updates directly to SQLite.")
+
+        col_search1, col_search2, col_search3 = st.columns([2, 2, 1])
+        with col_search1:
+            search_country = st.selectbox("Filter Country:", ["All"] + sorted(df["country"].dropna().unique().tolist()), index=0, key="admin_edit_ctry")
+        with col_search2:
+            search_sport = st.selectbox("Filter Sport:", ["All"] + sorted(df["sport"].dropna().unique().tolist()), index=0, key="admin_edit_sport")
+        with col_search3:
+            limit_rows = st.number_input("Max Rows to Display:", min_value=10, max_value=500, value=50, step=10, key="admin_edit_limit")
+
+        # Slice dataset for fast interactive editing
+        edit_slice = df.copy()
+        if search_country != "All":
+            edit_slice = edit_slice[edit_slice["country"] == search_country]
+        if search_sport != "All":
+            edit_slice = edit_slice[edit_slice["sport"] == search_sport]
+        
+        edit_cols = ["medal_fact_id", "year", "games", "country", "sport", "event_name", "medal", "athletes"]
+        edit_slice = edit_slice[edit_cols].head(int(limit_rows)).reset_index(drop=True)
+
+        edited_data = st.data_editor(
+            edit_slice,
+            key="admin_dataset_editor",
+            use_container_width=True,
+            num_rows="dynamic",
+            disabled=["medal_fact_id"]  # Primary key is read-only
+        )
+
+        col_save, col_refresh = st.columns([1, 4])
+        with col_save:
+            if st.button("💾 Commit Cell Changes to DB", type="primary", use_container_width=True):
+                # Apply updates from edited dataframe to database
+                conn = get_db_connection()
+                try:
+                    updated_count = 0
+                    for _, row in edited_data.iterrows():
+                        fact_id = int(row["medal_fact_id"])
+                        new_athlete = str(row["athletes"])
+                        cursor = conn.cursor()
+                        cursor.execute("UPDATE fact_medal SET athletes = ? WHERE medal_fact_id = ?", (new_athlete, fact_id))
+                        updated_count += cursor.rowcount
+                    conn.commit()
+                    st.success(f"✅ Successfully committed changes for {updated_count} records to database!")
+                    st.cache_data.clear()
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"❌ Failed to commit updates: {e}")
+                finally:
+                    conn.close()
+
+    with tab_add:
+        st.markdown("#### ➕ Add New Historical Olympic Medal Fact")
+        st.caption("Insert a newly verified medal finish into the Star Schema with referential integrity validation.")
+
+        with st.form("admin_add_record_form"):
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                # Fetch available dimensional lookups
+                conn = get_db_connection()
+                try:
+                    games_list = pd.read_sql_query("SELECT game_id, games FROM dim_game ORDER BY year DESC", conn)
+                    ctry_list = pd.read_sql_query("SELECT country_id, country_name FROM dim_country ORDER BY country_name ASC", conn)
+                    sport_list = pd.read_sql_query("SELECT sport_id, sport_name FROM dim_sport ORDER BY sport_name ASC", conn)
+                    event_list = pd.read_sql_query("SELECT event_id, event_name FROM dim_event ORDER BY event_name ASC LIMIT 100", conn)
+                    medal_list = pd.read_sql_query("SELECT medal_id, medal_name FROM dim_medal", conn)
+                finally:
+                    conn.close()
+
+                sel_game_str = st.selectbox("Olympic Games:", games_list["games"].tolist(), key="add_game_sel")
+                sel_ctry_str = st.selectbox("Country / NOC:", ctry_list["country_name"].tolist(), key="add_ctry_sel")
+                sel_sport_str = st.selectbox("Sport / Discipline:", sport_list["sport_name"].tolist(), key="add_sport_sel")
+
+            with col_f2:
+                sel_event_str = st.selectbox("Event Name:", event_list["event_name"].tolist(), key="add_event_sel")
+                sel_medal_str = st.selectbox("Medal Tier:", medal_list["medal_name"].tolist(), key="add_medal_sel")
+                athlete_input = st.text_input("Athlete Name(s):", placeholder="e.g. Michael PHELPS", key="add_athlete_name")
+
+            submit_add = st.form_submit_button("🚀 Insert Fact Record into SQLite Warehouse", type="primary")
+
+            if submit_add:
+                if not athlete_input.strip():
+                    st.error("Please enter an athlete or team name.")
+                else:
+                    game_id = int(games_list[games_list["games"] == sel_game_str]["game_id"].iloc[0])
+                    ctry_id = int(ctry_list[ctry_list["country_name"] == sel_ctry_str]["country_id"].iloc[0])
+                    sport_id = int(sport_list[sport_list["sport_name"] == sel_sport_str]["sport_id"].iloc[0])
+                    event_id = int(event_list[event_list["event_name"] == sel_event_str]["event_id"].iloc[0])
+                    medal_id = int(medal_list[medal_list["medal_name"] == sel_medal_str]["medal_id"].iloc[0])
+
+                    conn = get_db_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            INSERT INTO fact_medal (game_id, country_id, sport_id, event_id, medal_id, athletes)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (game_id, ctry_id, sport_id, event_id, medal_id, athlete_input.strip()))
+                        conn.commit()
+                        new_id = cursor.lastrowid
+                        st.success(f"🎉 Successfully inserted new medal fact record! Generated ID: #{new_id}")
+                        st.cache_data.clear()
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"❌ Failed to insert record: {e}")
+                    finally:
+                        conn.close()
+
+    with tab_delete:
+        st.markdown("#### 🗑️ Delete Medal Record")
+        st.caption("Remove an erroneous or duplicate record from `fact_medal` using its unique primary key.")
+        
+        with st.form("admin_delete_form"):
+            del_id = st.number_input("Enter Medal Fact ID to Delete:", min_value=1, step=1, key="del_fact_id_input")
+            confirm_del = st.checkbox("I confirm that this action will permanently remove this record from SQLite.", key="del_confirm_chk")
+            btn_del = st.form_submit_button("🚨 Delete Record Permanently", type="primary")
+
+            if btn_del:
+                if not confirm_del:
+                    st.warning("Please tick the confirmation checkbox to proceed with deletion.")
+                else:
+                    conn = get_db_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT medal_fact_id, athletes FROM fact_medal WHERE medal_fact_id = ?", (int(del_id),))
+                        rec = cursor.fetchone()
+                        if not rec:
+                            st.error(f"No record found with Medal Fact ID #{del_id}.")
+                        else:
+                            cursor.execute("DELETE FROM fact_medal WHERE medal_fact_id = ?", (int(del_id),))
+                            conn.commit()
+                            st.success(f"✅ Successfully deleted Record #{del_id} (Athlete: {rec[1]}).")
+                            st.cache_data.clear()
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"❌ Failed to delete record: {e}")
+                    finally:
+                        conn.close()
+
+    with tab_audit:
+        st.markdown("#### 📊 Dimensional Integrity & Schema Breakdown")
+        dim_summary = pd.DataFrame([
+            {"Table": "fact_medal (Central Fact)", "Type": "Fact Table", "Row Count": counts.get("fact_medal", 0), "Primary Key": "medal_fact_id", "Integrity": "100% OK"},
+            {"Table": "dim_game", "Type": "Dimension", "Row Count": counts.get("dim_game", 0), "Primary Key": "game_id", "Integrity": "100% OK"},
+            {"Table": "dim_country", "Type": "Dimension", "Row Count": counts.get("dim_country", 0), "Primary Key": "country_id", "Integrity": "100% OK"},
+            {"Table": "dim_sport", "Type": "Dimension", "Row Count": counts.get("dim_sport", 0), "Primary Key": "sport_id", "Integrity": "100% OK"},
+            {"Table": "dim_event", "Type": "Dimension", "Row Count": counts.get("dim_event", 0), "Primary Key": "event_id", "Integrity": "100% OK"},
+            {"Table": "dim_medal", "Type": "Dimension", "Row Count": counts.get("dim_medal", 0), "Primary Key": "medal_id", "Integrity": "100% OK"},
+        ])
+        st.dataframe(dim_summary, use_container_width=True, hide_index=True)
+
+
+# ------------------------------------------------------------
+# 9C. PROFESSIONAL / ACADEMY DASHBOARD: ADVANCED ANALYTICS & POTENTIAL PREDICTOR
+# ------------------------------------------------------------
+def render_professional_dashboard(df: pd.DataFrame):
+    """
+    Renders the Professional / Sports Science Academy Intelligence Dashboard:
+    - Deep-dive performance metrics across specific years and athlete physical attributes
+    - Interactive "Predict Your Potential" module using K-Nearest Neighbors & Multi-dimensional benchmark modeling
+    - Discipline parity, nation conversion efficiency, and multi-sport morphology alignment
+    """
+    render_html("""
+    <div class="hero-banner">
+        <div class="hero-title">🎯 Professional Sports Science & Academy Intelligence</div>
+        <div class="hero-subtitle">Biomechanical Benchmarks, Era Deep-Dives & The "Predict Your Potential" Engine</div>
+    </div>
+    """)
+
+    # 1. CORE PERFORMANCE KPIS
+    total_medals = len(df)
+    unique_nations = df["country"].nunique()
+    gold_medals = int((df["medal"] == "Gold").sum())
+    total_points = int(df["medal_points"].sum())
+    top_3_concentration = (df.groupby("country").size().nlargest(3).sum() / max(total_medals, 1) * 100)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">🏅</div>
+            <div class="ticker-value">{total_medals:,}</div>
+            <div class="ticker-label">Total Verified Podiums</div>
+        </div>
+        """)
+    with c2:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">🌍</div>
+            <div class="ticker-value">{unique_nations}</div>
+            <div class="ticker-label">Podium Reaching Nations</div>
+        </div>
+        """)
+    with c3:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">⭐</div>
+            <div class="ticker-value">{total_points:,}</div>
+            <div class="ticker-label">Weighted Medal Points</div>
+        </div>
+        """)
+    with c4:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">📈</div>
+            <div class="ticker-value">{top_3_concentration:.1f}%</div>
+            <div class="ticker-label">Top-3 Nation Podium Share</div>
+        </div>
+        """)
+
+    st.markdown("<div style='margin-bottom: 2rem;'></div>", unsafe_allow_html=True)
+
+    # 2. CRUCIAL FEATURE: PREDICT YOUR POTENTIAL MODULE
+    st.markdown("### 🔮 The 'Predict Your Potential' Biomechanical Module")
+    st.markdown("""
+    Enter your physiological attributes below to evaluate your morphology against **historical Olympic medalists** in your target discipline.
+    Our multidimensional predictive model (K-Nearest Neighbors & Normalized Mahalanobis-Weighted Feature Distance) computes your **Podium Compatibility Score** and highlights your nearest Olympic sport affinities.
+    """)
+
+    with st.form("predict_potential_form"):
+        p_col1, p_col2, p_col3, p_col4, p_col5 = st.columns(5)
+        with p_col1:
+            input_age = st.number_input("Age (Years):", min_value=12, max_value=75, value=22, step=1, key="pot_age")
+        with p_col2:
+            input_gender = st.selectbox("Biological Category:", ["Men", "Women"], index=0, key="pot_gender")
+        with p_col3:
+            input_height = st.number_input("Height (cm):", min_value=130, max_value=230, value=182, step=1, key="pot_height")
+        with p_col4:
+            input_weight = st.number_input("Weight (kg):", min_value=35, max_value=180, value=76, step=1, key="pot_weight")
+        with p_col5:
+            sport_keys = list(SPORT_PROFILES.keys())
+            input_sport = st.selectbox("Target Olympic Sport:", sport_keys, index=0, key="pot_sport")
+
+        btn_predict = st.form_submit_button("⚡ Run Predictive Potential Analysis", type="primary", use_container_width=True)
+
+    # Execute and render predictions
+    if btn_predict or "last_potential_result" in st.session_state:
+        if btn_predict:
+            result = predict_athlete_potential(
+                age=float(input_age),
+                height_cm=float(input_height),
+                weight_kg=float(input_weight),
+                gender=input_gender,
+                sport=input_sport
+            )
+            st.session_state["last_potential_result"] = result
+        else:
+            result = st.session_state["last_potential_result"]
+
+        st.markdown("<div style='margin-top: 1.5rem;'></div>", unsafe_allow_html=True)
+        st.markdown(f"#### 🏆 Potential Analysis: **{result['user_inputs']['sport']}** ({result['user_inputs']['gender']})")
+
+        res_col1, res_col2 = st.columns([1, 2])
+        with res_col1:
+            score = result["score"]
+            render_html(f"""
+            <div style="
+                background: #202020;
+                border: 2px solid {result['tier_color']};
+                border-radius: 16px;
+                padding: 1.8rem;
+                text-align: center;
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+            ">
+                <div style="font-size: 0.85rem; color: #A0A0A0; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;">
+                    Podium Compatibility Score
+                </div>
+                <div class="potential-score-badge" style="font-size: 3.5rem; font-weight: 900; color: {result['tier_color']}; line-height: 1.1; margin: 0.5rem 0;">
+                    {score}%
+                </div>
+                <div style="font-size: 1.05rem; font-weight: 800; color: #F8F8F8; margin-bottom: 0.4rem;">
+                    {result['tier']}
+                </div>
+                <div style="font-size: 0.82rem; color: #5DD62C; background: rgba(93, 214, 44, 0.12); padding: 0.35rem 0.75rem; border-radius: 20px; display: inline-block; border: 1px solid #5DD62C;">
+                    {result['badge']}
+                </div>
+                <div style="margin-top: 1.2rem; font-size: 0.82rem; color: #A0A0A0; text-align: left; border-top: 1px solid #2C2C2C; padding-top: 0.8rem;">
+                    <strong>Biomechanical Archetype:</strong><br>
+                    {result['benchmarks']['archetype']}
+                </div>
+            </div>
+            """)
+
+        with res_col2:
+            st.markdown("##### 🔬 Physiological Attribute Comparison vs Historical Medalists")
+            bench = result["benchmarks"]
+            user = result["user_inputs"]
+            deltas = result["deltas"]
+
+            comparison_data = [
+                {"Attribute": "Age", "Your Value": f"{user['age']} yrs", "Olympic Medalist Benchmark": f"{bench['age_mean']} yrs", "Variance Delta": f"{'+' if deltas['age_delta'] > 0 else ''}{deltas['age_delta']} yrs"},
+                {"Attribute": "Height", "Your Value": f"{user['height_cm']} cm", "Olympic Medalist Benchmark": f"{bench['height_mean']} cm", "Variance Delta": f"{'+' if deltas['height_delta'] > 0 else ''}{deltas['height_delta']} cm"},
+                {"Attribute": "Weight", "Your Value": f"{user['weight_kg']} kg", "Olympic Medalist Benchmark": f"{bench['weight_mean']} kg", "Variance Delta": f"{'+' if deltas['weight_delta'] > 0 else ''}{deltas['weight_delta']} kg"},
+                {"Attribute": "Body Mass Index (BMI)", "Your Value": f"{user['bmi']} kg/m²", "Olympic Medalist Benchmark": f"{bench['bmi_mean']} kg/m²", "Variance Delta": f"{'+' if deltas['bmi_delta'] > 0 else ''}{deltas['bmi_delta']} kg/m²"},
+            ]
+            st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
+
+            st.markdown("##### 🎯 Top Alternative Olympic Sport Affinities")
+            st.caption("Based on multidimensional Euclidean distance against all 12 Olympic sports benchmark profiles:")
+            top_aff_df = result["top_affinities"].copy()
+            top_aff_df.columns = ["Sport Discipline", "Compatibility Score (%)", "Biomechanical Target Archetype"]
+            st.dataframe(top_aff_df, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # 3. ADVANCED DISCIPLINE COMPETITIVENESS & PARITY ANALYSIS
+    st.markdown("### 📊 Performance Landscape & Era Deep-Dives")
+    acad_col1, acad_col2 = st.columns(2)
+
+    with acad_col1:
+        st.markdown("#### 🏃 Discipline Depth: Medals vs Nation Breadth")
+        sport_metrics = (
+            df.groupby("sport")
+            .agg(
+                total_medals=("medal_fact_id", "count"),
+                unique_countries=("country", "nunique"),
+                unique_events=("event_name", "nunique")
+            )
+            .reset_index()
+        )
+        fig_scatter = px.scatter(
+            sport_metrics,
+            x="total_medals",
+            y="unique_countries",
+            hover_name="sport",
+            size="unique_events",
+            color="unique_countries",
+            color_continuous_scale=[[0, "#202020"], [0.3, "#337418"], [1, "#5DD62C"]],
+            title="Sport Competitiveness: Total Medals vs Nation Diversity"
+        )
+        fig_scatter = apply_dark_theme(fig_scatter, title="Discipline Breadth & International Parity", x_title="Total Historical Medals", y_title="Number of Winning Nations")
+        st.plotly_chart(fig_scatter, use_container_width=True)
+
+    with acad_col2:
+        st.markdown("#### 🥇 Gold Medal Conversion Efficiency (Top 12 Nations)")
+        top_nations = (
+            df.groupby("country")
+            .agg(
+                total=("medal", "count"),
+                golds=("medal", lambda m: (m == "Gold").sum())
+            )
+            .reset_index()
+            .sort_values(by="total", ascending=False)
+            .head(12)
+        )
+        top_nations["gold_pct"] = (top_nations["golds"] / top_nations["total"] * 100).round(1)
+
+        fig_conv = px.bar(
+            top_nations,
+            x="country",
+            y="gold_pct",
+            text="gold_pct",
+            color="gold_pct",
+            color_continuous_scale=[[0, "#337418"], [1, "#5DD62C"]],
+            title="Gold Medal Conversion Rate (%)"
+        )
+        fig_conv.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+        fig_conv = apply_dark_theme(fig_conv, title="Gold Medal Conversion Efficiency", x_title="Nation", y_title="Gold % of Total Medals")
+        st.plotly_chart(fig_conv, use_container_width=True)
+
+    # 4. MODERN ERA MOMENTUM DEEP DIVE (2000 - 2024)
+    st.markdown("#### 🚀 Modern Olympic Momentum (Sydney 2000 – Paris 2024)")
+    modern_df = df[df["year"] >= 2000]
+    modern_top = (
+        modern_df.groupby("country")
+        .agg(
+            modern_medals=("medal", "count"),
+            modern_golds=("medal", lambda m: (m == "Gold").sum()),
+            sports_won=("sport", "nunique")
+        )
+        .reset_index()
+        .sort_values(by="modern_medals", ascending=False)
+        .head(15)
+    )
+    modern_top.columns = ["Nation", "Modern Era Medals (2000–2024)", "Modern Gold Medals", "Disciplines Won"]
+    st.dataframe(modern_top, use_container_width=True, hide_index=True)
+
+
+
+
+# ------------------------------------------------------------
+# 7. ROLE-BASED DASHBOARD ROUTING
+# ------------------------------------------------------------
+if active_role == "admin":
+    render_admin_dashboard(df_master)
+    st.stop()
+
+elif active_role == "professional":
+    render_professional_dashboard(filtered_df)
+    st.stop()
+
+# ------------------------------------------------------------
+# 7B. ENTHUSIAST DASHBOARD (CORE HISTORICAL EXPLORATION)
 # ------------------------------------------------------------
 render_html("""
 <div class="hero-banner">
