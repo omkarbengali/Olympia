@@ -104,6 +104,24 @@ render_html("""
     @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
     @import url('https://fonts.googleapis.com/icon?family=Material+Icons');
 
+    /* Hide default Streamlit multi-page sidebar navigation list */
+    [data-testid="stSidebarNav"] {
+        display: none !important;
+    }
+    
+    /* Alternative selector for multi-page nav links container */
+    div[data-testid="stSidebarNavItems"],
+    ul[data-testid="stSidebarNavItems"],
+    [data-testid="stSidebarNavSeparator"] {
+        display: none !important;
+    }
+
+    /* Target any multipage navigation block inside sidebar */
+    section[data-testid="stSidebar"] div:has(> ul[data-testid="stSidebarNavItems"]),
+    section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {
+        display: none !important;
+    }
+
     /* Global Typography System */
     html, body, [class*="css"], .stMarkdown {
         font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;

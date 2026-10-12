@@ -302,6 +302,14 @@ def render_login_scrolling_background():
             position: relative !important;
             z-index: 10 !important;
         }}
+
+        /* Hide default Streamlit multi-page sidebar navigation list */
+        [data-testid="stSidebarNav"],
+        div[data-testid="stSidebarNavItems"],
+        ul[data-testid="stSidebarNavItems"],
+        [data-testid="stSidebarNavSeparator"] {{
+            display: none !important;
+        }}
     </style>
 
     <div class="login-bg-container">
