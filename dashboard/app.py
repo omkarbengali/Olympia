@@ -35,6 +35,14 @@ from warehouse.warehouse import (
     get_db_path
 )
 from analytics.knn_potential import predict_athlete_potential, SPORT_PROFILES
+from analytics.sports_science import (
+    compute_peak_performance_window,
+    compute_consistency_scores,
+    compute_sport_specialization_index,
+    compute_talent_pipeline,
+    compute_competitive_parity,
+    SPORT_BASE_AGES
+)
 from analytics.visualization import (
     THEME_BG,
     PAPER_BG,
@@ -986,77 +994,488 @@ def render_professional_dashboard(df: pd.DataFrame):
 
     st.markdown("---")
 
-    # 3. ADVANCED DISCIPLINE COMPETITIVENESS & PARITY ANALYSIS
-    st.markdown("### 📊 Performance Landscape & Era Deep-Dives")
-    acad_col1, acad_col2 = st.columns(2)
+    # ============================================================
+    # 3. 📈 ATHLETE PERFORMANCE BENCHMARKING
+    # ============================================================
+    st.markdown("### 📈 1. Athlete Performance Benchmarking & Career Longevity")
+    st.caption("Biomechanical peak windows, age-to-medal trajectories, and multi-cycle Olympic consistency scoring.")
 
-    with acad_col1:
-        st.markdown("#### 🏃 Discipline Depth: Medals vs Nation Breadth")
-        sport_metrics = (
-            df.groupby("sport")
-            .agg(
-                total_medals=("medal_fact_id", "count"),
-                unique_countries=("country", "nunique"),
-                unique_events=("event_name", "nunique")
+    bench_tab1, bench_tab2 = st.tabs([
+        "🎯 Career Trajectory & Peak Years Window",
+        "⚖️ Multi-Cycle Olympic Consistency Scoring"
+    ])
+
+    with bench_tab1:
+        st.markdown("#### 🔬 Age Trajectory & Gold Medalist Peak Performance Window")
+        b_c1, b_c2 = st.columns([2, 1])
+        with b_c1:
+            all_sports_list = ["All"] + sorted(df["sport"].dropna().unique().tolist())
+            bench_sport = st.selectbox("Select Target Sport / Discipline:", all_sports_list, index=0, key="prof_bench_sport")
+        with b_c2:
+            bench_medal = st.radio("Medal Tier:", ["All", "Gold", "Silver", "Bronze"], horizontal=True, key="prof_bench_medal")
+
+        peak_data = compute_peak_performance_window(df, sport=bench_sport, medal_filter=bench_medal)
+
+        # 4 Metric cards for peak window
+        p1, p2, p3, p4 = st.columns(4)
+        with p1:
+            render_html(f"""
+            <div class="ticker-card">
+                <div class="ticker-icon">🎯</div>
+                <div class="ticker-value">{peak_data['mean_age']} yrs</div>
+                <div class="ticker-label">Mean Age ({peak_data['sport']})</div>
+            </div>
+            """)
+        with p2:
+            render_html(f"""
+            <div class="ticker-card">
+                <div class="ticker-icon">📊</div>
+                <div class="ticker-value">{peak_data['peak_window_min']} – {peak_data['peak_window_max']}</div>
+                <div class="ticker-label">Peak Performance Window (±1σ)</div>
+            </div>
+            """)
+        with p3:
+            render_html(f"""
+            <div class="ticker-card">
+                <div class="ticker-icon">📐</div>
+                <div class="ticker-value">±{peak_data['std_age']} yrs</div>
+                <div class="ticker-label">Age Standard Deviation (σ)</div>
+            </div>
+            """)
+        with p4:
+            render_html(f"""
+            <div class="ticker-card">
+                <div class="ticker-icon">👥</div>
+                <div class="ticker-value">{peak_data['sample_size']:,}</div>
+                <div class="ticker-label">Analyzed Podium Sample</div>
+            </div>
+            """)
+
+        st.markdown("<div style='margin-bottom: 1rem;'></div>", unsafe_allow_html=True)
+
+        # Visualizing Age Distribution and Peak Zone
+        if not peak_data["age_df"].empty:
+            age_df = peak_data["age_df"]
+            fig_peak = px.histogram(
+                age_df,
+                x="computed_age",
+                color="medal" if bench_medal == "All" else None,
+                nbins=35,
+                barmode="stack",
+                color_discrete_map={"Gold": "#FFD700", "Silver": "#C0C0C0", "Bronze": "#CD7F32"},
+                title=f"Podium Finisher Age Distribution: {peak_data['sport']} (Highlighted Peak Window: {peak_data['peak_window_min']} - {peak_data['peak_window_max']} yrs)"
             )
-            .reset_index()
-        )
-        fig_scatter = px.scatter(
-            sport_metrics,
-            x="total_medals",
-            y="unique_countries",
-            hover_name="sport",
-            size="unique_events",
-            color="unique_countries",
-            color_continuous_scale=[[0, "#202020"], [0.3, "#337418"], [1, "#5DD62C"]],
-            title="Sport Competitiveness: Total Medals vs Nation Diversity"
-        )
-        fig_scatter = apply_dark_theme(fig_scatter, title="Discipline Breadth & International Parity", x_title="Total Historical Medals", y_title="Number of Winning Nations")
-        st.plotly_chart(fig_scatter, use_container_width=True)
-
-    with acad_col2:
-        st.markdown("#### 🥇 Gold Medal Conversion Efficiency (Top 12 Nations)")
-        top_nations = (
-            df.groupby("country")
-            .agg(
-                total=("medal", "count"),
-                golds=("medal", lambda m: (m == "Gold").sum())
+            fig_peak.add_vrect(
+                x0=peak_data["peak_window_min"],
+                x1=peak_data["peak_window_max"],
+                fillcolor="#5DD62C",
+                opacity=0.15,
+                line_width=1,
+                line_dash="dot",
+                annotation_text="🎯 Peak Window (±1σ)",
+                annotation_position="top left"
             )
-            .reset_index()
-            .sort_values(by="total", ascending=False)
-            .head(12)
-        )
-        top_nations["gold_pct"] = (top_nations["golds"] / top_nations["total"] * 100).round(1)
+            fig_peak.add_vline(
+                x=peak_data["mean_age"],
+                line_width=2.5,
+                line_dash="dash",
+                line_color="#5DD62C",
+                annotation_text=f"Mean: {peak_data['mean_age']} yrs",
+                annotation_position="top right"
+            )
+            fig_peak = apply_dark_theme(fig_peak, title=f"Biomechanical Peak Window: {peak_data['sport']}", x_title="Age at Medal Achievement (Years)", y_title="Number of Medalists")
+            st.plotly_chart(fig_peak, use_container_width=True)
 
-        fig_conv = px.bar(
-            top_nations,
-            x="country",
-            y="gold_pct",
-            text="gold_pct",
-            color="gold_pct",
-            color_continuous_scale=[[0, "#337418"], [1, "#5DD62C"]],
-            title="Gold Medal Conversion Rate (%)"
-        )
-        fig_conv.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig_conv = apply_dark_theme(fig_conv, title="Gold Medal Conversion Efficiency", x_title="Nation", y_title="Gold % of Total Medals")
-        st.plotly_chart(fig_conv, use_container_width=True)
+    with bench_tab2:
+        st.markdown("#### 🛡️ Multi-Cycle Olympic Consistency Scoring")
+        st.caption("Evaluates performance stability across consecutive Olympic editions (coefficient of variation inverse).")
 
-    # 4. MODERN ERA MOMENTUM DEEP DIVE (2000 - 2024)
-    st.markdown("#### 🚀 Modern Olympic Momentum (Sydney 2000 – Paris 2024)")
-    modern_df = df[df["year"] >= 2000]
-    modern_top = (
-        modern_df.groupby("country")
-        .agg(
-            modern_medals=("medal", "count"),
-            modern_golds=("medal", lambda m: (m == "Gold").sum()),
-            sports_won=("sport", "nunique")
+        cons_mode = st.radio("Consistency Evaluation Mode:", ["Nation Multi-Cycle Stability", "Individual Legend Career Stability"], horizontal=True, key="prof_cons_mode")
+
+        if cons_mode == "Nation Multi-Cycle Stability":
+            scores_df = compute_consistency_scores(df, mode="Nation", top_n=15)
+            fig_cons = px.bar(
+                scores_df,
+                x="consistency_score",
+                y="country",
+                orientation="h",
+                color="consistency_score",
+                text="consistency_score",
+                color_continuous_scale=[[0, "#202020"], [0.4, "#337418"], [1, "#5DD62C"]],
+                title="Top 15 Nations by Olympic Cycle Consistency Index (0–100%)"
+            )
+            fig_cons.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+            fig_cons.update_layout(yaxis=dict(autorange="reversed"))
+            fig_cons = apply_dark_theme(fig_cons, title="National Cycle Consistency Index", x_title="Consistency Score (0–100%)", y_title="Nation")
+            st.plotly_chart(fig_cons, use_container_width=True)
+
+            with st.expander("📋 Detailed Nation Cycle Stability Metrics Table"):
+                disp_scores = scores_df.rename(columns={
+                    "country": "Nation",
+                    "editions_participated": "Olympic Editions",
+                    "total_medals": "Total Medals",
+                    "mean_per_cycle": "Mean Medals / Cycle",
+                    "std_per_cycle": "Std Dev / Cycle",
+                    "consistency_score": "Consistency Score (%)"
+                })
+                st.dataframe(disp_scores, use_container_width=True, hide_index=True)
+
+        else:
+            athlete_scores_df = compute_consistency_scores(df, mode="Athlete", top_n=15)
+            fig_ath_cons = px.bar(
+                athlete_scores_df,
+                x="consistency_score",
+                y="athletes",
+                orientation="h",
+                color="consistency_score",
+                text="consistency_score",
+                color_continuous_scale=[[0, "#202020"], [0.4, "#337418"], [1, "#5DD62C"]],
+                title="Top 15 Athletes by Multi-Edition Olympic Consistency Index"
+            )
+            fig_ath_cons.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+            fig_ath_cons.update_layout(yaxis=dict(autorange="reversed"))
+            fig_ath_cons = apply_dark_theme(fig_ath_cons, title="Legend Multi-Edition Career Stability", x_title="Consistency Score (0–100%)", y_title="Athlete")
+            st.plotly_chart(fig_ath_cons, use_container_width=True)
+
+            with st.expander("📋 Detailed Athlete Career Longevity Table"):
+                disp_ath = athlete_scores_df.rename(columns={
+                    "athletes": "Athlete",
+                    "country": "Nation",
+                    "sport": "Discipline",
+                    "editions_count": "Editions Won In",
+                    "first_year": "First Medal",
+                    "last_year": "Last Medal",
+                    "career_span_years": "Career Span (Yrs)",
+                    "total_medals": "Total Medals",
+                    "gold_medals": "Golds",
+                    "consistency_score": "Consistency Score (%)"
+                })
+                st.dataframe(disp_ath, use_container_width=True, hide_index=True)
+
+    st.markdown("---")
+
+    # ============================================================
+    # 4. 🎯 SPORT SPECIALIZATION INDEX
+    # ============================================================
+    st.markdown("### 🎯 2. Sport Specialization Index (Concentration vs. Diversification)")
+    st.caption("Quantifies national athletic portfolio diversification using Normalized Shannon Entropy & Sports HHI.")
+
+    spec_c1, spec_c2 = st.columns([1, 2])
+    with spec_c1:
+        min_medals_threshold = st.slider("Minimum Medals Filter:", min_value=15, max_value=100, value=30, step=5, key="prof_spec_min_m")
+        spec_df = compute_sport_specialization_index(df, min_medals=min_medals_threshold)
+        
+        all_spec_countries = spec_df["country"].tolist() if not spec_df.empty else []
+        focus_country = st.selectbox("Select Nation for Portfolio Deep-Dive:", all_spec_countries, index=0 if all_spec_countries else None, key="prof_spec_ctry")
+
+    with spec_c2:
+        if not spec_df.empty:
+            most_spec = spec_df.iloc[0]
+            most_div = spec_df.iloc[-1]
+            avg_div = round(spec_df["diversification_index"].mean(), 1)
+
+            mc1, mc2, mc3 = st.columns(3)
+            with mc1:
+                render_html(f"""
+                <div class="ticker-card">
+                    <div class="ticker-icon">🎯</div>
+                    <div class="ticker-value" style="color: {most_spec['badge_color']};">{most_spec['specialization_index']}%</div>
+                    <div class="ticker-label">Most Concentrated: {most_spec['country']} ({most_spec['top_sport']})</div>
+                </div>
+                """)
+            with mc2:
+                render_html(f"""
+                <div class="ticker-card">
+                    <div class="ticker-icon">🌐</div>
+                    <div class="ticker-value" style="color: {most_div['badge_color']};">{most_div['diversification_index']}%</div>
+                    <div class="ticker-label">Most Diversified: {most_div['country']} ({most_div['sports_count']} Sports)</div>
+                </div>
+                """)
+            with mc3:
+                render_html(f"""
+                <div class="ticker-card">
+                    <div class="ticker-icon">📊</div>
+                    <div class="ticker-value">{avg_div}%</div>
+                    <div class="ticker-label">Mean Portfolio Diversification</div>
+                </div>
+                """)
+
+    if not spec_df.empty:
+        col_s1, col_s2 = st.columns([3, 2])
+        with col_s1:
+            fig_bubble = px.scatter(
+                spec_df,
+                x="diversification_index",
+                y="specialization_index",
+                size="total_medals",
+                color="archetype",
+                hover_name="country",
+                hover_data={"total_medals": True, "sports_count": True, "top_sport": True, "top_sport_share_pct": True},
+                color_discrete_map={
+                    "Hyper-Specialized (Single Core Focus)": "#FF4444",
+                    "Targeted Concentration": "#FFD700",
+                    "Balanced Specialist": "#38BDF8",
+                    "Multi-Discipline Powerhouse": "#5DD62C"
+                },
+                title="National Athletic Portfolio: Concentration vs. Diversification Index"
+            )
+            fig_bubble.update_traces(marker=dict(line=dict(width=1, color="#202020")))
+            fig_bubble = apply_dark_theme(fig_bubble, title="National Portfolio Concentration Matrix", x_title="Diversification Score (%) [Normalized Entropy]", y_title="Specialization Score (%)")
+            st.plotly_chart(fig_bubble, use_container_width=True)
+
+        with col_s2:
+            if focus_country:
+                focus_data = df[df["country"] == focus_country]
+                focus_sports = focus_data["sport"].value_counts().reset_index()
+                focus_sports.columns = ["sport", "medals"]
+                
+                if len(focus_sports) > 6:
+                    top6 = focus_sports.head(6)
+                    other_count = focus_sports.iloc[6:]["medals"].sum()
+                    other_row = pd.DataFrame([{"sport": "Other Disciplines", "medals": other_count}])
+                    focus_sports_plot = pd.concat([top6, other_row], ignore_index=True)
+                else:
+                    focus_sports_plot = focus_sports
+
+                fig_donut = px.pie(
+                    focus_sports_plot,
+                    names="sport",
+                    values="medals",
+                    hole=0.45,
+                    title=f"🏅 {focus_country} Discipline Distribution",
+                    color_discrete_sequence=["#5DD62C", "#337418", "#A3E635", "#FFD700", "#38BDF8", "#F43F5E", "#888888"]
+                )
+                fig_donut.update_traces(textposition="inside", textinfo="percent+label")
+                fig_donut = apply_dark_theme(fig_donut, title=f"{focus_country}: Discipline Concentration", x_title="", y_title="")
+                st.plotly_chart(fig_donut, use_container_width=True)
+
+    st.markdown("---")
+
+    # ============================================================
+    # 5. 🚀 TALENT DISTRIBUTION PIPELINE
+    # ============================================================
+    st.markdown("### 🚀 3. Talent Distribution Pipeline & Generational Breakthrough")
+    st.caption("Tracks generational athlete shifts across eras and measures the debutant Breakthrough Rate.")
+
+    pipeline_data = compute_talent_pipeline(df)
+    b_df = pipeline_data["breakthrough_df"]
+    era_df = pipeline_data["era_summary"]
+
+    t_c1, t_c2, t_c3 = st.columns(3)
+    with t_c1:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">⚡</div>
+            <div class="ticker-value">{pipeline_data['latest_breakthrough_rate']}%</div>
+            <div class="ticker-label">Latest Edition Breakthrough Rate</div>
+        </div>
+        """)
+    with t_c2:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">📈</div>
+            <div class="ticker-value">{pipeline_data['avg_breakthrough_rate']}%</div>
+            <div class="ticker-label">Historical Average Rookie Share</div>
+        </div>
+        """)
+    with t_c3:
+        retention = round(100.0 - pipeline_data['avg_breakthrough_rate'], 1)
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">🔄</div>
+            <div class="ticker-value">{retention}%</div>
+            <div class="ticker-label">Veteran Podium Retention Rate</div>
+        </div>
+        """)
+
+    st.markdown("<div style='margin-bottom: 1rem;'></div>", unsafe_allow_html=True)
+
+    pipe_col1, pipe_col2 = st.columns(2)
+    with pipe_col1:
+        st.markdown("#### 🌊 First-Time Medalists vs Returning Veterans Across Editions")
+        fig_break = go.Figure()
+        fig_break.add_trace(go.Bar(
+            x=b_df["year"],
+            y=b_df["debutants"],
+            name="🌟 First-Time Medalists (Debuts)",
+            marker_color="#5DD62C"
+        ))
+        fig_break.add_trace(go.Bar(
+            x=b_df["year"],
+            y=b_df["veterans"],
+            name="🛡️ Returning Veterans",
+            marker_color="#202020",
+            marker_line=dict(color="#337418", width=1.5)
+        ))
+        fig_break.add_trace(go.Scatter(
+            x=b_df["year"],
+            y=b_df["breakthrough_rate_pct"],
+            name="⚡ Breakthrough Rate (%)",
+            yaxis="y2",
+            mode="lines+markers",
+            line=dict(color="#FFD700", width=2.5),
+            marker=dict(size=5, color="#FFD700")
+        ))
+        fig_break.update_layout(
+            barmode="stack",
+            yaxis=dict(title="Podium Medalists Count"),
+            yaxis2=dict(
+                title="Breakthrough Rate (%)",
+                overlaying="y",
+                side="right",
+                range=[0, 105],
+                showgrid=False
+            ),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        .reset_index()
-        .sort_values(by="modern_medals", ascending=False)
-        .head(15)
-    )
-    modern_top.columns = ["Nation", "Modern Era Medals (2000–2024)", "Modern Gold Medals", "Disciplines Won"]
-    st.dataframe(modern_top, use_container_width=True, hide_index=True)
+        fig_break = apply_dark_theme(fig_break, title="Olympic Debutant Breakthrough Trajectory", x_title="Olympic Year", y_title="Podium Finishers")
+        st.plotly_chart(fig_break, use_container_width=True)
+
+    with pipe_col2:
+        st.markdown("#### 🏛️ Generational Era Transition: Athletes, Nations & Disciplines")
+        fig_era = px.bar(
+            era_df,
+            x="generational_era",
+            y=["total_medals", "unique_athletes", "unique_nations"],
+            barmode="group",
+            color_discrete_sequence=["#5DD62C", "#FFD700", "#38BDF8"],
+            title="Generational Growth Across Historical Olympic Epochs"
+        )
+        fig_era = apply_dark_theme(fig_era, title="Epoch Scale & Athlete Population", x_title="Generational Era", y_title="Count")
+        st.plotly_chart(fig_era, use_container_width=True)
+
+    st.markdown("---")
+
+    # ============================================================
+    # 6. ⚖️ COMPETITIVE PARITY ANALYZER (HHI & GINI LORENZ CURVE)
+    # ============================================================
+    st.markdown("### ⚖️ 4. Competitive Parity Analyzer (HHI & Gini Coefficient)")
+    st.caption("Evaluates global tournament fairness, market monopoly, and international medal parity.")
+
+    par_col1, par_col2 = st.columns([2, 1])
+    with par_col1:
+        parity_sports_list = sorted(df["sport"].dropna().unique().tolist())
+        target_parity_sport = st.selectbox("Select Sport to Analyze Competitive Parity:", parity_sports_list, index=parity_sports_list.index("Table Tennis") if "Table Tennis" in parity_sports_list else 0, key="prof_parity_sport")
+    with par_col2:
+        min_y = int(df["year"].min())
+        max_y = int(df["year"].max())
+        parity_year_range = st.slider("Historical Era Range:", min_value=min_y, max_value=max_y, value=(min_y, max_y), step=4, key="prof_parity_years")
+
+    parity_res = compute_competitive_parity(df, sport=target_parity_sport, year_range=parity_year_range)
+
+    # 4 Parity Metric Cards
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">📊</div>
+            <div class="ticker-value" style="color: {parity_res['badge_color']};">{parity_res['hhi']}</div>
+            <div class="ticker-label">Herfindahl Index (HHI)</div>
+        </div>
+        """)
+    with k2:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">📐</div>
+            <div class="ticker-value">{parity_res['gini']}</div>
+            <div class="ticker-label">Gini Coefficient (0=Equal, 1=Monopoly)</div>
+        </div>
+        """)
+    with k3:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">👑</div>
+            <div class="ticker-value">{parity_res['top_nation']} ({parity_res['top_share']}%)</div>
+            <div class="ticker-label">Leading Nation Medal Share</div>
+        </div>
+        """)
+    with k4:
+        render_html(f"""
+        <div class="ticker-card">
+            <div class="ticker-icon">🌍</div>
+            <div class="ticker-value">{parity_res['nations_count']} Nations</div>
+            <div class="ticker-label">Total Podium Reaching Nations</div>
+        </div>
+        """)
+
+    # Status Badge Callout
+    render_html(f"""
+    <div style="
+        background: #202020;
+        border-left: 4px solid {parity_res['badge_color']};
+        border-radius: 8px;
+        padding: 1rem 1.25rem;
+        margin: 1.25rem 0;
+    ">
+        <span style="font-size: 1.05rem; font-weight: 800; color: {parity_res['badge_color']};">
+            Parity Classification: {parity_res['status']}
+        </span>
+        <div style="font-size: 0.85rem; color: #A0A0A0; margin-top: 0.25rem;">
+            {parity_res['description']}
+        </div>
+    </div>
+    """)
+
+    # Parity Visuals: Lorenz Curve & Historical HHI Trend
+    pv_col1, pv_col2 = st.columns(2)
+    with pv_col1:
+        st.markdown("#### 📈 Plotly Lorenz Curve of Medal Concentration")
+        fig_lorenz = go.Figure()
+        fig_lorenz.add_trace(go.Scatter(
+            x=[0, 100],
+            y=[0, 100],
+            mode="lines",
+            line=dict(color="#5DD62C", dash="dash", width=2),
+            name="⚖️ Perfect Parity Line (Equal Distribution)"
+        ))
+        fig_lorenz.add_trace(go.Scatter(
+            x=parity_res["lorenz_x"],
+            y=parity_res["lorenz_y"],
+            mode="lines",
+            fill="tonexty",
+            fillcolor="rgba(93, 214, 44, 0.12)",
+            line=dict(color="#FFD700", width=3),
+            name=f"Actual Distribution ({target_parity_sport})"
+        ))
+        fig_lorenz.update_layout(
+            xaxis=dict(title="Cumulative % of Competing Nations", range=[0, 100]),
+            yaxis=dict(title="Cumulative % of Medals Won", range=[0, 100]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        fig_lorenz = apply_dark_theme(fig_lorenz, title=f"Lorenz Inequality Curve: {target_parity_sport} (Gini: {parity_res['gini']})", x_title="Cumulative % of Nations", y_title="Cumulative % of Medals Won")
+        st.plotly_chart(fig_lorenz, use_container_width=True)
+
+    with pv_col2:
+        st.markdown("#### ⏳ Historical HHI Parity Trend Across Olympic Editions")
+        if not parity_res["hhi_trend"].empty:
+            hhi_df = parity_res["hhi_trend"]
+            fig_hhi_trend = px.line(
+                hhi_df,
+                x="year",
+                y="hhi",
+                markers=True,
+                line_shape="spline",
+                color_discrete_sequence=["#5DD62C"],
+                title=f"Evolution of {target_parity_sport} Parity (HHI Over Time)"
+            )
+            fig_hhi_trend.add_hline(
+                y=2500,
+                line_dash="dot",
+                line_color="#FF4444",
+                annotation_text="High Monopoly (2,500)",
+                annotation_position="top left"
+            )
+            fig_hhi_trend.add_hline(
+                y=1500,
+                line_dash="dot",
+                line_color="#FFD700",
+                annotation_text="Moderate Parity (1,500)",
+                annotation_position="bottom left"
+            )
+            fig_hhi_trend = apply_dark_theme(fig_hhi_trend, title=f"{target_parity_sport}: Parity Trajectory Over Time", x_title="Olympic Year", y_title="Herfindahl Index (HHI)")
+            st.plotly_chart(fig_hhi_trend, use_container_width=True)
+        else:
+            st.info("Insufficient historical points to plot multi-edition HHI trend.")
 
 
 
